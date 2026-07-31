@@ -425,31 +425,18 @@ class FF_CLient():
 
     async def Auto_Room_Welcome(self, room_id, chat_code, user_uid, user_name="Player"):
         try:
-            # ইউনিক ট্র্যাকিং কি (বট আইডি + রুম আইডি + ইউজার আইডি)
-            tracking_key = f"{self.bot_uid}_{room_id}_{user_uid}"
-            current_time = time.time()
-            
-            # ট্র্যাকিং চেক: যদি ৩ মিনিট (১৮০ সেকেন্ড) পার না হয়, তবে রিটার্ন করবে
-            if tracking_key in welcome_tracking:
-                last_time = welcome_tracking[tracking_key]
-                if current_time - last_time < 1:
-                    # ১ মিনিট পার হয়নি, তাই মেসেজ পাঠাবে না
-                    return
+        
+            await asyncio.sleep(0.2)
 
-            # ট্র্যাকিং টাইম আপডেট
-            welcome_tracking[tracking_key] = current_time
-
-            # ডাটা আপডেট (ড্যাশবোর্ডের জন্য)
             curr_time_str = datetime.now().strftime("%I:%M:%S %p")
             update_bot_info(self.U, last_room_id=str(room_id), last_active=curr_time_str)
 
             if self.writer:
-                # রুম চ্যাট ওপেন প্যাকেট
                 open_pkt = await Mahir_OpeN_RoOm_ChaT(room_id, chat_code, self.key, self.iv)
                 if open_pkt:
                     self.writer.write(open_pkt)
                     await self.writer.drain()
-                    await asyncio.sleep(0.4)
+                    await asyncio.sleep(0.1) 
 
                 welcome_msg = (
                     f"[C][FFD700]❖━━━━━━━━━━━━━━━❖\n"
@@ -562,9 +549,6 @@ class FF_CLient():
                                     u_uid = user_data.get('2', {}).get('data') # User ID
                                     u_name = user_data.get('3', {}).get('data', 'Player') # User Name
 
-                                    # ৩. শর্ত সাপেক্ষে ওয়েলকাম মেসেজ ট্রিগার
-                                    # যদি Room ID, Bot UID অথবা User ID-র যেকোনো একটি পরিবর্তন হয়, 
-                                    # তবে welcome_tracking-এ নতুন কি (Key) তৈরি হবে এবং সাথে সাথে মেসেজ যাবে।
                                     if r_id and c_code and u_uid:
                                         asyncio.create_task(
                                             self.Auto_Room_Welcome(
@@ -575,9 +559,6 @@ class FF_CLient():
                                             )
                                         )
                                         
-                                        # বান্ডেল চেঞ্জ কমান্ড কল করা
-                                        asyncio.create_task(send_random_bundle(bot_uid=int(bot_uid), key=key, iv=iv, region="BD"))
-
                                 except Exception:
                                     pass
 
@@ -1619,6 +1600,32 @@ class BotHandler(BaseHTTPRequestHandler):
                 "bots": status_copy
             }
             self.wfile.write(json.dumps(response_payload).encode('utf-8'))
+
+        elif self.path == '/api/summary': # আমাদের নতুন API
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            
+            total_accs = load_accounts()
+            total_count = len(total_accs)
+            active = 0
+            connecting = 0
+            
+            with bot_lock:
+                for info in bot_status.values():
+                    s = info.get('status', "")
+                    if any(x in s for x in ['✅', 'Connected', 'Online']): active += 1
+                    elif any(x in s for x in ['🔄', 'Connecting', 'Initializing']): connecting += 1
+            
+            running = active + connecting
+            res = {
+                "total": total_count,
+                "running": running,
+                "closed": total_count - running,
+                "online": active,
+                "connecting": connecting
+            }
+            self.wfile.write(json.dumps(res).encode('utf-8'))
 
         elif self.path == '/get_accs':
             self.send_response(200)
