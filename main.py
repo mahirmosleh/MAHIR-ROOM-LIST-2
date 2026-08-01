@@ -425,9 +425,7 @@ class FF_CLient():
 
     async def Auto_Room_Welcome(self, room_id, chat_code, user_uid, user_name="Player"):
         try:
-        
-            await asyncio.sleep(0.2)
-
+ 
             curr_time_str = datetime.now().strftime("%I:%M:%S %p")
             update_bot_info(self.U, last_room_id=str(room_id), last_active=curr_time_str)
 
@@ -436,7 +434,7 @@ class FF_CLient():
                 if open_pkt:
                     self.writer.write(open_pkt)
                     await self.writer.drain()
-                    await asyncio.sleep(0.1) 
+                    await asyncio.sleep(0.4) 
 
                 welcome_msg = (
                     f"[C][FFD700]❖━━━━━━━━━━━━━━━❖\n"
@@ -460,7 +458,7 @@ class FF_CLient():
                     self.writer.write(msg_pkt)
                     await self.writer.drain()
                 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.2)
                 await self.send_store_shortcut(room_id)
                 
                 log_terminal(f"WELCOME SENT TO: {user_name} (UID: {user_uid}) IN ROOM: {room_id}", "success")
