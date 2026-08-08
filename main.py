@@ -495,10 +495,16 @@ class FF_CLient():
                     my_idx = 0
                 
                 pos = my_idx % 20
-                if pos < 10: # প্রথম ১০টি
+
+                if pos < 8:  # প্রথম ৮টি অ্যাকাউন্ট
                     selected_room_func = Room2v2
                     mode_name = "2v2"
-                elif pos < 20: # পরের ৫টি
+
+                elif pos < 16:  # পরবর্তী ৮টি অ্যাকাউন্ট
+                    selected_room_func = Roomlw
+                    mode_name = "lw"
+
+                else:  # শেষ ৪টি অ্যাকাউন্ট
                     selected_room_func = Room4v4
                     mode_name = "4v4"
                 
