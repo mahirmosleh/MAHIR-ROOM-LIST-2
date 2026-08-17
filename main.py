@@ -430,64 +430,6 @@ async def run_bot(uid, pwd, index):
     bot = FreeFireBot(uid=uid, password=pwd, server='bd', index=index)
     await bot.keep_online_forever()
 
-async def try_start_bot_sequential(uid, pwd, index):
-    """একটি নির্দিষ্ট বটের জন্য লগইন করার চেষ্টা করবে (সর্বোচ্চ ২ বার)"""
-    for attempt in range(1, 3):  # ১ এবং ২ নম্বর চেষ্টা
-        console.print(f"[bold yellow]🔄 Attempt {attempt}: Launching UID {uid}...[/bold yellow]")
-        
-        # বট অবজেক্ট তৈরি
-        bot = FreeFireBot(uid=uid, password=pwd, index=index)
-        
-        # লগইন এবং অনলাইন হওয়ার জন্য একটি টাস্ক তৈরি করা
-        bot_task = asyncio.create_task(bot.keep_online_forever())
-        
-        # ১৫-২০ সেকেন্ড অপেক্ষা করা দেখা অনলাইন হয় কি না
-        wait_time = 0
-        while wait_time < 25: 
-            await asyncio.sleep(2)
-            wait_time += 2
-            if bot.is_online:
-                console.print(f"[bold green]✅ UID {uid} is now ONLINE. Moving to next account...[/bold green]")
-                return True # সফল হয়েছে
-        
-        # যদি এই লুপ শেষ হয় তার মানে অনলাইন হয়নি
-        console.print(f"[bold red]⚠️ Attempt {attempt} failed for UID {uid}.[/bold red]")
-        bot.is_running = False # এই চেষ্টা বন্ধ করা
-        bot_task.cancel() # টাস্ক বাতিল করা
-
-    console.print(f"[bold red]❌ UID {uid} failed after 2 attempts. Skipping...[/bold red]")
-    return False # ২ বার চেষ্টায়ও ব্যর্থ
-
-async def sequential_account_loader():
-    """সবগুলো অ্যাকাউন্ট একে একে (One by One) চেক করে রান করাবে"""
-    processed_accounts = set() # যেগুলোর কাজ শেষ হয়েছে (সফল বা ব্যর্থ)
-
-    while True:
-        try:
-            accounts = load_accounts()
-            for index, (uid, pwd) in enumerate(accounts.items()):
-                # যদি অলরেডি রানিং থাকে বা আগে ট্রাই করা হয়ে থাকে তবে স্কিপ
-                if uid in running_bots or uid in processed_accounts:
-                    continue
-                
-                # সিরিয়ালি একটির পর একটি অ্যাকাউন্ট স্টার্ট করার চেষ্টা
-                success = await try_start_bot_sequential(uid, pwd, index)
-                
-                if success:
-                    with running_bots_lock:
-                        running_bots.add(uid)
-                
-                # প্রসেস হয়ে গেলে মার্ক করে রাখা (যাতে বারবার ট্রাই না করে)
-                processed_accounts.add(uid)
-                
-                # পরের অ্যাকাউন্ট ধরার আগে ৩ সেকেন্ড গ্যাপ
-                await asyncio.sleep(0.3)
-
-        except Exception as e:
-            console.print(f"[bold red]Loader Error: {e}[/bold red]")
-        
-        await asyncio.sleep(10) # সবগুলো চেক হয়ে গেলে ১০ সেকেন্ড রেস্ট
-
 def dynamic_account_loader():
     """স্বয়ংক্রিয়ভাবে accs.json ফাইল স্ক্যান করে নতুন অ্যাকাউন্ট রান করাবে"""
     while True:
@@ -670,17 +612,22 @@ class FreeFireBot:
         return members
 
     def get_room_mode(self):
-        # জোড় সংখ্যক ইন্ডেক্সের বটগুলো 1v1 এবং বিজোড়গুলো 2v2 খুলবে
-        if self.index % 2 == 0:
-            return Room1v1, "1v1"
-        else:
+        # 6v6 বাদ — lw, 2v2 এবং 4v4 চলবে
+        remainder = self.index % 3
+
+        if remainder == 0:
+            return Roomlw, "lw"
+        elif remainder == 1:
             return Room2v2, "2v2"
+        else:
+            return Room4v4, "4v4"
 
     # ---------- TCP ONLINE (ROOM UPDATE - CLEAN LOGGING) ----------
     async def tcp_online(self, ip, port, auth_token):
         self.current_room_id = None 
         self.is_in_side2 = False 
         self.room_members = set()
+        self.current_chat_code = None # চ্যাট কোড সেভ রাখার জন্য
         
         while self.is_running:
             try:
@@ -692,7 +639,7 @@ class FreeFireBot:
                 update_bot_info(self.uid, status="✅ Online", room_active=True)
                 
                 selected_color = get_random_color()
-                room_name = f"[B]➥{selected_color}ᎷAH!Ꮢ"
+                room_name = f"[B]{selected_color}ᎷAH!Ꮢ"
                 room_func, mode_name = self.get_room_mode()
                 self.room_pkt = room_func(room_name, self.key, self.iv)
                 
@@ -714,35 +661,28 @@ class FreeFireBot:
                                     cmd_type = packet_json.get('4', {}).get('data')
                                     f5 = packet_json.get('5', {}).get('data', {})
                                     
-                                    # --- ১. রুম এবং বটের তথ্য ডিটেকশন (CMD 5, 25, 1) ---
+                                    # --- ১. রুম এবং বটের তথ্য ডিটেকশন ---
                                     if cmd_type in [5, 25, 1]:
                                         room_info = f5.get('2', {}).get('data', {})
-                                        
-                                        # সঠিক ডেটা এক্সট্রাকশন (আপনার দেওয়া প্যাকেট পাথ অনুযায়ী)
                                         r_id = room_info.get('1', {}).get('data')
                                         r_name = room_info.get('2', {}).get('data')
                                         bot_acc_id = room_info.get('3', {}).get('data')
                                         
-                                        # বটের নাম ফিল্ড ১২ এর ভেতরে ৩ নম্বর সাব-ফিল্ডে থাকে
-                                        f12 = room_info.get('12', {}).get('data', {})
-                                        bot_acc_name = f12.get('3', {}).get('data') if isinstance(f12, dict) else "Unknown"
+                                        # চ্যাট কোড সংগ্রহ করে রাখা মেসেজ পাঠানোর জন্য
+                                        self.current_chat_code = room_info.get('36', {}).get('data') or room_info.get('40', {}).get('data')
 
                                         if r_id and str(r_id) != str(self.current_room_id):
-                                            if 10000000 < int(r_id) < 999999999: # Room ID ভ্যালিডেশন
+                                            if 10000000 < int(r_id) < 999999999:
                                                 self.current_room_id = r_id
-                                                
-                                                # টার্মিনালে ক্লিন প্যানেল
                                                 console.print(Panel(
                                                     f"[bold green]🏠 Room Name   :[/bold green] [white]{r_name}[/white]\n"
-                                                    f"[bold green]🆔 Room ID     :[/bold green] [bold yellow]{r_id}[/bold yellow]\n"
-                                                    f"[bold cyan]👤 Bot Acc Name:[/bold cyan] [white]{bot_acc_name}[/white]\n"
-                                                    f"[bold cyan]🆔 Bot Acc ID  :[/bold cyan] [white]{bot_acc_id}[/white]",
+                                                    f"[bold green]🆔 Room ID     :[/bold green] [bold yellow]{r_id}[/bold yellow]",
                                                     title=f"[bold magenta]✨ ROOM ESTABLISHED ({self.uid})[/bold magenta]",
                                                     border_style="cyan"
                                                 ))
                                                 update_bot_info(self.uid, last_room_id=str(r_id), room_active=True)
 
-                                    # --- ২. প্লেয়ার জয়েন এবং সাইড চেঞ্জ ---
+                                    # --- ২. প্লেয়ার জয়েন (শুধু ওয়েলকাম মেসেজ যাবে, সাইড চেঞ্জ হবে না) ---
                                     user_info = f5.get('1', {}).get('data', {})
                                     if isinstance(user_info, dict):
                                         u_uid = user_info.get('2', {}).get('data')
@@ -753,58 +693,52 @@ class FreeFireBot:
                                             if uid_str not in self.room_members:
                                                 p_name = str(u_name) if u_name and not str(u_name).isdigit() else "Player"
                                                 
-                                                # সাইড চেঞ্জ (Side 2)
-                                                if not self.is_in_side2 and self.current_room_id:
-                                                    move_pkt = await Mahir_Room_Site_Change(self.current_room_id, self.bot_uid, 2, 1, self.key, self.iv)
-                                                    if move_pkt:
-                                                        self.online_writer.write(move_pkt)
-                                                        await self.online_writer.drain()
-                                                        self.is_in_side2 = True
-                                                        await asyncio.sleep(0.2)
-
-                                                # ওয়েলকাম মেসেজ
-                                                c_code = room_info.get('36', {}).get('data') or room_info.get('40', {}).get('data')
-                                                if self.current_room_id and c_code:
-                                                    asyncio.create_task(self.Auto_Room_Welcome(self.current_room_id, c_code, uid_str, user_name=p_name))
+                                                # ওয়েলকাম মেসেজ পাঠানো
+                                                if self.current_room_id and self.current_chat_code:
+                                                    asyncio.create_task(self.Auto_Room_Welcome(self.current_room_id, self.current_chat_code, uid_str, user_name=p_name))
                                                 
                                                 self.room_members.add(uid_str)
-                                                console.print(f"[bold cyan][{self.uid}][/bold cyan] [bold green]➜ Player Joined:[/bold green] {p_name} ({uid_str})")
+                                                console.print(f"[bold cyan][{self.uid}][/bold cyan] [bold green]➜ Player Joined:[/bold green] {p_name}")
 
-                                    # --- ৩. রুম ফুল ডিটেকশন ও স্টার্ট (আপনার দেওয়া CMD 65 অনুযায়ী) ---
+                                    # --- ৩. রুম ফুল ডিটেকশন (স্টার্ট না করে মেসেজ দিবে) ---
                                     if cmd_type == 65:
                                         is_full = f5.get('1', {}).get('data')
                                         if is_full == 1 and self.current_room_id:
-                                            console.print(f"[bold red]!!! ROOM FULL ({self.current_room_id}) !!! STARTING MATCH...[/bold red]")
+                                            console.print(f"[bold yellow]!!! ROOM FULL ({self.current_room_id}) !!! SENDING REJECTION MSG...[/bold yellow]")
                                             
-                                            start_pkt = await Mahir_Room_START(self.current_room_id, self.key, self.iv)
-                                            if start_pkt:
-                                                self.online_writer.write(start_pkt)
+                                            # আপনার দেওয়া মেসেজ
+                                            sorry_msg = (
+                                                "[C][FF0000]sorry এই room টি start হবে না\n"
+                                                "[C][FFFF00]আপনি দয়া করে [00FF00]➥ᎷAH!Ꮢ [FFFF00]এই নামের\n"
+                                                "[C][FFFF00]কাস্টম এর মধ্যে জয়েন করেন\n"
+                                                "[C][00FFFF]সেইটি start হবে"
+                                            )
+                                            
+                                            # চ্যাট মেসেজ প্যাকেট পাঠানো
+                                            if self.chat_writer and self.current_chat_code:
+                                                msg_pkt = await MAHIR_SEnd_RoOm_MsG(self.current_room_id, sorry_msg, self.bot_uid, self.key, self.iv)
+                                                if msg_pkt:
+                                                    self.chat_writer.write(msg_pkt)
+                                                    await self.chat_writer.drain()
+                                            
+                                            await asyncio.sleep(2.0) # মেসেজ পড়ার জন্য সময়
+                                            
+                                            # স্টার্ট না করে সরাসরি এক্সিট করা
+                                            exit_pkt = await Mahir_Room_ExiT(self.bot_uid, self.key, self.iv)
+                                            if exit_pkt:
+                                                self.online_writer.write(exit_pkt)
                                                 await self.online_writer.drain()
-                                                await asyncio.sleep(1.5) # MMM Style Delay
                                                 
-                                                exit_pkt = await Mahir_Room_ExiT(self.bot_uid, self.key, self.iv)
-                                                if exit_pkt:
-                                                    self.online_writer.write(exit_pkt)
-                                                    await self.online_writer.drain()
-                                                    
-                                                    # ডাটা রিসেট ও রিক্রিয়েট
-                                                    self.room_members.clear()
-                                                    self.is_in_side2 = False
-                                                    await asyncio.sleep(0.5)
-                                                    self.online_writer.write(self.room_pkt)
-                                                    await self.online_writer.drain()
-                                                    console.print(f"[bold cyan][{self.uid}][/bold cyan] [bold green]New Room Created.[/bold green]")
+                                                # ডাটা রিসেট ও নতুন রুম তৈরি
+                                                self.room_members.clear()
+                                                await asyncio.sleep(0.5)
+                                                self.online_writer.write(self.room_pkt)
+                                                await self.online_writer.drain()
+                                                console.print(f"[bold cyan][{self.uid}][/bold cyan] [bold green]New Room Created.[/bold green]")
 
-                                    # --- ৪. কেউ বেরিয়ে গেলে (Cmd 7) ---
+                                    # --- ৪. কেউ বেরিয়ে গেলে ---
                                     if cmd_type == 7:
                                         self.room_members.clear()
-                                        if self.is_in_side2 and self.current_room_id:
-                                            await asyncio.sleep(0.3)
-                                            back_pkt = await Mahir_Room_Site_Change(self.current_room_id, self.bot_uid, 1, 0, self.key, self.iv)
-                                            if back_pkt:
-                                                self.online_writer.write(back_pkt)
-                                                await self.online_writer.drain()
-                                                self.is_in_side2 = False
 
                                 except Exception: pass
                         
@@ -1769,21 +1703,20 @@ def start_web_server():
 async def main_async():
     print(render('MAHIR', colors=['white', 'red'], align='center'))
     
-    # অটো-রিস্টার্ট থ্রেড
+    # অটো-রিস্টার্ট থ্রেড শুরু
     threading.Thread(target=AuTo_ResTartinG, daemon=True).start()
 
-    # ওয়েব সার্ভার থ্রেড
     web_thread = threading.Thread(target=start_web_server, daemon=True)
     web_thread.start()
     await asyncio.sleep(1)
 
-    #Loader: এখানে থ্রেডের বদলে সরাসরি asyncio টাস্ক হিসেবে রান করাবো
-    asyncio.create_task(sequential_account_loader())
+    loader_thread = threading.Thread(target=dynamic_account_loader, daemon=True)
+    loader_thread.start()
     
     console.print(Panel(
         "[bold green]✅ System Active & Running[/bold green]\n"
         "[cyan]🌐 Dashboard: http://localhost:8080[/cyan]\n"
-        "[yellow]🔄 Mode: Sequential (One-by-One Online)[/yellow]",
+        "[yellow]🔄 Auto-Restart: Active (Every 1 Hour)[/yellow]",
         title="[bold red]🔥 MAHIR BOT SYSTEM 🔥[/bold red]",
         border_style="bright_red",
         expand=False
