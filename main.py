@@ -430,6 +430,72 @@ async def run_bot(uid, pwd, index):
     bot = FreeFireBot(uid=uid, password=pwd, server='bd', index=index)
     await bot.keep_online_forever()
 
+async def process_single_bot(uid, pwd, index):
+    """একটি নির্দিষ্ট বটের জন্য সর্বোচ্চ ২ বার চেষ্টা করবে"""
+    for attempt in range(1, 3):
+        # একটি নতুন বট অবজেক্ট তৈরি
+        bot = FreeFireBot(uid=uid, password=pwd, index=index)
+        bot_task = asyncio.create_task(bot.keep_online_forever())
+        
+        # অনলাইন হওয়ার জন্য পর্যাপ্ত সময় অপেক্ষা (৩০ সেকেন্ড)
+        wait_time = 0
+        while wait_time < 30: # ৩০ সেকেন্ড পর্যন্ত অপেক্ষা করবে
+            await asyncio.sleep(0.1) # প্রতি ১ সেকেন্ড পর পর চেক করবে
+            wait_time += 1
+            if bot.is_online:
+                console.print(f"[bold green]✅ [Attempt {attempt}] UID {uid} is ONLINE.[/bold green]")
+                with running_bots_lock:
+                    running_bots.add(uid)
+                return True 
+
+        # ৩০ সেকেন্ডে না হলে টাস্ক বন্ধ করে দিবে
+        bot.is_running = False
+        bot_task.cancel()
+        await asyncio.sleep(0.1) 
+
+    console.print(f"[bold red]🚫 Skipping UID {uid} (Failed 2 attempts).[/bold red]")
+    return False
+
+async def batch_account_loader():
+    """একসাথে ৫০টি করে অ্যাকাউন্ট প্রসেস করবে"""
+    processed_accounts = set()
+    BATCH_SIZE = 50 
+
+    while True:
+        try:
+            accounts = load_accounts()
+            all_pending = [(uid, pwd) for uid, pwd in accounts.items() 
+                           if uid not in running_bots and uid not in processed_accounts]
+
+            if not all_pending:
+                await asyncio.sleep(3)
+                continue
+
+            for i in range(0, len(all_pending), BATCH_SIZE):
+                current_batch = all_pending[i : i + BATCH_SIZE]
+                console.print(f"[bold magenta]🚀 Launching Batch: {len(current_batch)} Accounts...[/bold magenta]")
+                
+                tasks = []
+                for index, (uid, pwd) in enumerate(current_batch):
+                    # ৫০টি আইডি একসাথে স্টার্ট হবে
+                    tasks.append(process_single_bot(uid, pwd, i + index))
+                    # আইডিগুলো ছাড়ার মাঝে সামান্য গ্যাপ (০.২ সেকেন্ড) যাতে ক্রাশ না করে
+                    await asyncio.sleep(0.2) 
+                
+                # ৫০টি টাস্কের রেজাল্ট আসা পর্যন্ত অপেক্ষা করবে
+                await asyncio.gather(*tasks)
+                
+                for uid, _ in current_batch:
+                    processed_accounts.add(uid)
+                
+                console.print(f"[bold blue]📦 Batch finished. Moving to next...[/bold blue]")
+                await asyncio.sleep(0.1) # ব্যাচ শেষে সামান্য রেস্ট
+
+        except Exception as e:
+            console.print(f"[bold red]Batch Loader Error: {e}[/bold red]")
+        
+        await asyncio.sleep(0.1)
+
 def dynamic_account_loader():
     """স্বয়ংক্রিয়ভাবে accs.json ফাইল স্ক্যান করে নতুন অ্যাকাউন্ট রান করাবে"""
     while True:
@@ -1703,20 +1769,21 @@ def start_web_server():
 async def main_async():
     print(render('MAHIR', colors=['white', 'red'], align='center'))
     
-    # অটো-রিস্টার্ট থ্রেড শুরু
+    # অটো-রিস্টার্ট থ্রেড
     threading.Thread(target=AuTo_ResTartinG, daemon=True).start()
 
+    # ওয়েব সার্ভার
     web_thread = threading.Thread(target=start_web_server, daemon=True)
     web_thread.start()
     await asyncio.sleep(1)
 
-    loader_thread = threading.Thread(target=dynamic_account_loader, daemon=True)
-    loader_thread.start()
+    # একবারে ৫০টি করে আইডি লোড করার টাস্ক
+    asyncio.create_task(batch_account_loader())
     
     console.print(Panel(
         "[bold green]✅ System Active & Running[/bold green]\n"
         "[cyan]🌐 Dashboard: http://localhost:8080[/cyan]\n"
-        "[yellow]🔄 Auto-Restart: Active (Every 1 Hour)[/yellow]",
+        "[yellow]🔄 Batch Mode: 50 Accounts Simultaneously[/yellow]",
         title="[bold red]🔥 MAHIR BOT SYSTEM 🔥[/bold red]",
         border_style="bright_red",
         expand=False
