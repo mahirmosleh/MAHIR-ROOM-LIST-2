@@ -705,7 +705,7 @@ class FreeFireBot:
                 update_bot_info(self.uid, status="✅ Online", room_active=True)
                 
                 selected_color = get_random_color()
-                room_name = f"[B]{selected_color}PIYASH"
+                room_name = f"[B]{selected_color}ᎷAH!Ꮢ"
                 room_func, mode_name = self.get_room_mode()
                 self.room_pkt = room_func(room_name, self.key, self.iv)
                 
