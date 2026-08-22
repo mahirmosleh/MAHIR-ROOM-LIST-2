@@ -706,10 +706,10 @@ class FreeFireBot:
                 
                 # --- এখানে পরিবর্তন করা হয়েছে ---
                 selected_color = get_random_color()
-                name_styles = ["MΔH!R", "MΛH!R", "ᘻᗩᕼᓰᖇ", "ᎷᎪᎻᏆᎡ", "ᎷAH!Ꮢ"]
+                name_styles = ["MΛH!R", "ᎷᎪᎻᏆᎡ", "ᎷAH!Ꮢ"]
                 selected_name = random.choice(name_styles)
                 
-                room_name = f"[B]➥{selected_color}{selected_name}"
+                room_name = f"[B]{selected_color}{selected_name}"
                 # ------------------------------
 
                 room_func, mode_name = self.get_room_mode()
